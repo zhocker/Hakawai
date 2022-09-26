@@ -127,67 +127,75 @@ typedef NSMutableArray RectValuesBuffer;
     if ([attributeTuples count] == 0 || !container) {
         return nil;
     }
-
     NSMutableArray *finalRectArrays = [NSMutableArray new];
 
-    NSRange currentRange;
-    RectValuesBuffer *lineFragments = [NSMutableArray new];
-    RectValuesBuffer *enclosingRects = [NSMutableArray new];
-    for (RoundedRectAttributeTuple *tuple in attributeTuples) {
-        [lineFragments removeAllObjects];
-        [enclosingRects removeAllObjects];
+    @try {
+        NSRange currentRange;
+        RectValuesBuffer *lineFragments = [NSMutableArray new];
+        RectValuesBuffer *enclosingRects = [NSMutableArray new];
+        for (RoundedRectAttributeTuple *tuple in attributeTuples) {
+            [lineFragments removeAllObjects];
+            [enclosingRects removeAllObjects];
 
-        // Destructure the tuple
-        currentRange = [((NSValue *)tuple[0]) rangeValue];
-        HKWRoundedRectBackgroundAttributeValue *data = tuple[1];
-        if (currentRange.location == NSNotFound) {
-            continue;
+            // Destructure the tuple
+            currentRange = [((NSValue *)tuple[0]) rangeValue];
+            HKWRoundedRectBackgroundAttributeValue *data = tuple[1];
+            if (currentRange.location == NSNotFound) {
+                continue;
+            }
+
+            // Get the line fragment rects for the given RRB attribute
+            [self enumerateLineFragmentsForGlyphRange:currentRange
+                                           usingBlock:^(__unused CGRect rect,
+                                                        CGRect usedRect,
+                                                        NSTextContainer *textContainer,
+                                                        NSRange glyphRange,
+                                                        __unused BOOL *stop) {
+                                               if (container != textContainer) {
+                                                   return;
+                                               }
+                                               NSString *substr = [[self.textStorage attributedSubstringFromRange:glyphRange] string];
+                                               NSUInteger count = [[self class] numberOfTrailingSpacesInString:substr];
+                                               if (count == 0) {
+                                                   [lineFragments addObject:[NSValue valueWithCGRect:usedRect]];
+                                               }
+                                               else {
+                                                   // Technically, glyphs don't map one-to-one with characters.
+                                                   // However, this should be okay, because it only triggers for trailing
+                                                   //  whitespace characters, which *should* map one-to-one with their
+                                                   //  glyphs.
+                                                   // If there are trailing whitespace/newlines, remove them.
+                                                   NSAssert((NSUInteger)glyphRange.length >= count, @"Internal error");
+                                                   NSRange subRange = NSMakeRange((NSUInteger)glyphRange.location, (NSUInteger)glyphRange.length-count);
+                                                   CGRect subRect = [self boundingRectForGlyphRange:subRange inTextContainer:textContainer];
+                                                   [lineFragments addObject:[NSValue valueWithCGRect:subRect]];
+                                               }
+                                           }];
+
+            // Get the enclosing rects for the given RRB attribute
+            [self enumerateEnclosingRectsForGlyphRange:currentRange
+                              withinSelectedGlyphRange:NSMakeRange(NSNotFound, 0)
+                                       inTextContainer:container
+                                            usingBlock:^(CGRect rect, __unused BOOL *stop) {
+                                                [enclosingRects addObject:[NSValue valueWithCGRect:rect]];
+                                            }];
+
+            // Combine the two sets of rects to form a final rects group
+            NSArray *unionRects = [self arrayOfRectsForFragmentRects:lineFragments
+                                                      enclosingRects:enclosingRects
+                                                    rrbAttributeData:data];
+            if (!unionRects) {
+                return nil;
+            }
+            [finalRectArrays addObject:unionRects];
         }
 
-        // Get the line fragment rects for the given RRB attribute
-        [self enumerateLineFragmentsForGlyphRange:currentRange
-                                       usingBlock:^(__unused CGRect rect,
-                                                    CGRect usedRect,
-                                                    NSTextContainer *textContainer,
-                                                    NSRange glyphRange,
-                                                    __unused BOOL *stop) {
-                                           if (container != textContainer) {
-                                               return;
-                                           }
-                                           NSString *substr = [[self.textStorage attributedSubstringFromRange:glyphRange] string];
-                                           NSUInteger count = [[self class] numberOfTrailingSpacesInString:substr];
-                                           if (count == 0) {
-                                               [lineFragments addObject:[NSValue valueWithCGRect:usedRect]];
-                                           }
-                                           else {
-                                               // Technically, glyphs don't map one-to-one with characters.
-                                               // However, this should be okay, because it only triggers for trailing
-                                               //  whitespace characters, which *should* map one-to-one with their
-                                               //  glyphs.
-                                               // If there are trailing whitespace/newlines, remove them.
-                                               NSAssert((NSUInteger)glyphRange.length >= count, @"Internal error");
-                                               NSRange subRange = NSMakeRange((NSUInteger)glyphRange.location, (NSUInteger)glyphRange.length-count);
-                                               CGRect subRect = [self boundingRectForGlyphRange:subRange inTextContainer:textContainer];
-                                               [lineFragments addObject:[NSValue valueWithCGRect:subRect]];
-                                           }
-                                       }];
+    } @catch (NSException *exception) {
+        
+        return [NSArray arrayWithArray:finalRectArrays];
+        
+    } @finally {
 
-        // Get the enclosing rects for the given RRB attribute
-        [self enumerateEnclosingRectsForGlyphRange:currentRange
-                          withinSelectedGlyphRange:NSMakeRange(NSNotFound, 0)
-                                   inTextContainer:container
-                                        usingBlock:^(CGRect rect, __unused BOOL *stop) {
-                                            [enclosingRects addObject:[NSValue valueWithCGRect:rect]];
-                                        }];
-
-        // Combine the two sets of rects to form a final rects group
-        NSArray *unionRects = [self arrayOfRectsForFragmentRects:lineFragments
-                                                  enclosingRects:enclosingRects
-                                                rrbAttributeData:data];
-        if (!unionRects) {
-            return nil;
-        }
-        [finalRectArrays addObject:unionRects];
     }
     return [NSArray arrayWithArray:finalRectArrays];
 }
